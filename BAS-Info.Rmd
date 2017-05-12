@@ -1,0 +1,234 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+### Completed by Connor Lenio. Email: cojamalo@gmail.com. Completion Date: May 11, 2017.
+
+### Sources
+This notebook includes information from the following webpages (Accessed 5/11/2017):
+* https://rdrr.io/cran/BAS/
+* https://cran.r-project.org/web/packages/BAS/vignettes/BAS-vignette.html
+* https://www2.stat.duke.edu/courses/Spring17/sta521/knitr/Lec-14-BMA/bma.pdf
+
+### Load Packages
+```{r}
+library(DAAG)
+library(AICcmodavg)
+library(BAS)
+library(dplyr)
+if(!exists("tree_lm", mode="function")) source("~/GitHub/Multiple-Linear-Reg-Tools/mult_regres.R")
+```
+
+### Source Data
+```{r}
+data(mtcars)
+```
+
+### Transform any variables if needed
+`find_best_trans` finds best fits using prediction error as way to determine best fit (specifically, LOOCV)
+```{r}
+new_mtcars <- add_best_trans(find_best_trans(mpg,mtcars),mtcars)
+glimpse(new_mtcars[,(ncol(mtcars)+1):ncol(new_mtcars)])
+```
+
+### Run the BAS linear regression - Creates the BMA
+```{r}
+cars.ZS =  bas.lm(mpg ~ ., 
+                   data=new_mtcars,
+                  method = "deterministic",
+                   prior="ZS-null",
+                   modelprior=uniform()) 
+```
+
+#### Method
+By default, BAS will try to enumerate all models, using the default method="BAS". An alternative to method="BAS":
+
+* method="deterministic" - like BAS but possibly faster?
+* method="BAS" uses Bayesian Adaptive Sampling (without replacement) using the sampling probabilities given in initprobs; 
+* method="MCMC" samples with replacement via a MCMC algorithm that combines the birth/death random walk in Hoeting et al (1997) of MC3 with a random swap move to interchange a variable in the model with one currently excluded as described in Clyde, Ghosh and Littman (2010); 
+* method="MCMC+BAS" runs an initial MCMC to calculate marginal inclusion probabilities and then samples without replacement as in BAS. For BAS, the sampling probabilities can be updated as more models are sampled. 
+
+We recommend "MCMC+BAS" or "MCMC" for high dimensional problems where enumeration is not feasible.
+MCMC example
+```{r}
+cars.MCMC =  bas.lm(mpg ~ ., 
+                   data=new_mtcars,
+                   prior="ZS-null",
+                   modelprior=uniform(),
+                   method = "MCMC", MCMC.iterations = 10^6)  
+
+diagnostics(cars.MCMC, type="model", pch=16)
+```
+
+#### Prior
+By default, BAS will use the prior="ZS-null" or the Zellner-Siow Cauchy prior. Alternatives in order of sophistircation:
+
+* g-prior - needs g, a scalar used in the covariance of Zellner's g-prior, Cov(beta) = sigma^2 g (X'X)^-1
+
+* ZS-null - special case of hyper-g? where alpha = n (sample size) - Use this typically
+
+* hyper-g - needs "alpha", a scalar > 0. The hyper.g(alpha) is equivalent to CCH(alpha -2, 2, 0). Liang et al recommended values in the range 2 < alpha_h <= 3
+
+* hyper-g/n - needs "alpha", a scalar > 0, recommended 2 < alpha <= 3
+
+Other prior distributions on the regression coefficients may be specified using the prior argument, and include:
+
+“BIC”
+“AIC
+“hyper-g-laplace”
+“ZS-null”
+“EB-local”
+“EB-global”
+
+#### Modelprior
+The prior distribution over the models is a uniform() distribution which assigns equal probabilities to all models. As far as I can understand, this is the prior over the size of the model (# of variables). Other modelpriors:
+* modelprior=uniform()
+The Uniform prior distribution is a commonly used prior in BMA, and is a special case of the indpendent Bernoulli prior with probs=.5. The implied prior distribution on model size is binomial(p, .5).
+
+* modelprior=beta.binomial(1,1)
+The beta-binomial distribution on model size is obtained by assigning each variable inclusion indicator independent Bernoulli distributions with probability w, and then giving w a beta(alpha,beta) distribution. Marginalizing over w leads to the distribution on model size having the beta-binomial distribution. The default hyperparaeters lead to a uniform distribution over model size.
+
+* modelprior=Bernoulli(probs=.5)
+The independent Bernoulli prior distribution is a commonly used prior in BMA, with the Uniform distribution a special case with probs=.5. If all indicator variables have a independent Bernoulli distributions with common probability probs, the distribution on model size binomial(p, probs) distribution.
+
+* modelprior=tr.poisson(4,10) - truncated poisson - all models over size 10 are given probability zero - also tr.beta.binomial and tr.power.prior
+In this case the distribution of the number of variables to be included has a Poisson distribution, with mean 4 (under no truncation), and the truncation point is at 10, so that all models with more than 10 (one half of cases rounded down) will have probability zero.
+
+#### Initprobs
+The last optional argument initprobs = eplogp provides a way to initialize the sampling algorithm and order the variables in the tree structure that represents the model space in BAS. The eplogp option uses the Bayes factor calibration of p-values −eplog(p)−eploga(p) to provide an approximation to the marginal inclusion probability that the coefficient of each predictor is zero, using the p-values from the full model. Other options for initprobs include:
+
+* “uniform” - the default, gives equal weight to all possible models
+
+* eplogp - The eplogp option uses the Bayes factor calibration of p-values −eplog(p)−eploga(p) to provide an approximation to the marginal inclusion probability that the coefficient of each predictor is zero, using the p-values from the full model
+
+* “marg-eplogp”"- The option “marg-eplogp” uses p-values from the p simple linear regressions (useful for large p or highly correlated variables).
+
+* numeric vector of length p - can force inclusion of some variables - 1 for forced inclusion, 0.5 for uniform?
+  example: initprobs=c(rep(0.5, times = 8), 1, rep(0.5, times = 10)), this means force the 9th variable to be included in final model and give uniform to rest 
+
+### Visualize Bayesian Model Diagnostics
+```{r}
+plot(cars.ZS, ask=F)
+```
+
+### View the model features
+#### Includes Marginal Posterior Inclusion Probabilities
+```{r}
+print(cars.ZS)
+```
+
+#### Includes top five models
+BF = 1.0000 is the Best Predictive Model
+Notice that model one's PostProbs is huge relative to model 2 - likely that BMA (Model avergage) = BPM (Best predictive)
+```{r}
+summary(cars.ZS)
+```
+
+### Visualize variable selection
+Variables with highest inclusion are on left, weaker models are on right
+```{r}
+image(cars.ZS, rotate=F)
+```
+
+### Visualize probability curves for coefficients of each variable
+```{r}
+plot(coef(cars.ZS), ask=FALSE)
+```
+
+### View the variable coefficents with 95% credible intervales for each variable in the BMA
+#### As a table
+```{r}
+confint(coef(cars.ZS))
+```
+
+#### Visualize the previous table
+```{r}
+plot(confint(coef(cars.ZS)))
+```
+
+#### Can also find confidence intervals for Highest probability model (HPM), MPM, BPM, etc
+```{r}
+plot(confint(coef(cars.ZS, estimator = "HPM")))
+```
+
+### Predictions and Model Summaries
+Construct the "fitted" vectors to compare predictions to fitted values
+```{r}
+muhat.BMA = fitted(cars.ZS, estimator="BMA")
+BMA  = predict(cars.ZS, estimator="BMA")
+summary(BMA)
+```
+
+#### Visualize the fitted versus predicted
+```{r}
+par(mar=c(9, 9, 3, 3))
+plot(muhat.BMA, BMA$fit, 
+     pch=16, 
+     xlab=expression(hat(mu[i])), ylab=expression(hat(Y[i])))
+abline(0,1)
+```
+
+### Find the included variables for different model types
+#### Highest probability model
+```{r}
+HPM = predict(cars.ZS, estimator="HPM")
+(cars.ZS$namesx[HPM$bestmodel +1])[-1]
+```
+
+#### Median probability model
+```{r}
+MPM = predict(cars.ZS, estimator="MPM")
+(cars.ZS$namesx[attr(MPM$fit, 'model') +1])[-1]
+```
+
+
+#### Best predictive model
+```{r}
+BPM = predict(cars.ZS, estimator="BPM")
+(cars.ZS$namesx[attr(BPM$fit, 'model') +1])[-1]
+```
+
+### Plot the fits for all major models - Shows agreement between models, easy to see similar models
+```{r}
+library(GGally)
+ggpairs(data.frame(HPM = as.vector(HPM$fit),  #this used predict so we need to extract fitted values
+                   MPM = as.vector(MPM$fit),  # this used fitted
+                   BPM = as.vector(BPM$fit),  # this used fitted
+                   BMA = as.vector(BMA$fit))) # this used predict
+```
+
+#### Plot the fitted value errors - shows for ehich values in data model has greater uncertainty or not
+```{r}
+errors = predict(cars.ZS, estimator="HPM", se.fit=TRUE)
+cars.conf.fit = confint(errors, parm="mean")
+cars.conf.pred = confint(errors, parm="pred")
+plot(cars.conf.fit)
+RMSE_data <- cbind(cars.conf.pred, response = new_mtcars$mpg) %>% tbl_df %>% mutate(error = pred - response, SE = error^2)
+summarize(RMSE_data, MSE = mean(SE), RMSE = sqrt(MSE))
+```
+```{r}
+errors = predict(cars.ZS, estimator="BPM", se.fit=TRUE)
+cars.conf.fit = confint(errors, parm="mean")
+cars.conf.pred = confint(errors, parm="pred")
+plot(cars.conf.fit)
+RMSE_data <- cbind(cars.conf.pred, response = new_mtcars$mpg) %>% tbl_df %>% mutate(error = pred - response, SE = error^2)
+summarize(RMSE_data, MSE = mean(SE), RMSE = sqrt(MSE))
+```
+
+```{r}
+errors = predict(cars.ZS, estimator="BMA", se.fit=TRUE)
+cars.conf.fit = confint(errors, parm="mean")
+cars.conf.pred = confint(errors, parm="pred")
+plot(cars.conf.fit)
+RMSE_data <- cbind(cars.conf.pred, response = new_mtcars$mpg) %>% tbl_df %>% mutate(error = pred - response, SE = error^2)
+summarize(RMSE_data, MSE = mean(SE), RMSE = sqrt(MSE))
+```
+
+```{r}
+errors = predict(cars.ZS, estimator="MPM", se.fit=TRUE)
+cars.conf.fit = confint(errors, parm="mean")
+cars.conf.pred = confint(errors, parm="pred")
+plot(cars.conf.fit)
+RMSE_data <- cbind(cars.conf.pred, response = new_mtcars$mpg) %>% tbl_df %>% mutate(error = pred - response, SE = error^2)
+summarize(RMSE_data, MSE = mean(SE), RMSE = sqrt(MSE))
+```
